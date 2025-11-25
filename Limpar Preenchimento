@@ -1,0 +1,15 @@
+Sub LimparColunaJ()
+    Dim ultimaLinha As Long
+    Dim ws As Worksheet
+
+    Set ws = ActiveSheet
+
+    ' Encontrar a última linha com valor na coluna K
+    ultimaLinha = ws.Cells(ws.Rows.count, "j").End(xlUp).Row
+
+    ' Limpar o preenchimento das células de K6 até a última com valor
+    ws.Range("j6:j" & ultimaLinha).Interior.ColorIndex = xlNone
+
+    ' Mensagem de conclusão
+    MsgBox "Limpeza Completa!", vbInformation, "Status"
+End Sub
