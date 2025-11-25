@@ -1,0 +1,119 @@
+Sub AcharValor_v2()
+    Dim rng As Range, cel As Range
+    Dim valores() As Double, enderecos() As String
+    Dim ws As Worksheet
+    Dim alvo As Double
+    Dim countVal As Long, tamanhoMax As Long
+    
+    Set ws = ActiveSheet
+    
+    ' Selecionar intervalo
+    On Error Resume Next
+    Set rng = Application.InputBox("Selecione o intervalo de valores na coluna J:", Type:=8)
+    On Error GoTo 0
+    If rng Is Nothing Then Exit Sub
+    
+    ' Validar célula alvo
+    If Not IsNumeric(ws.Range("J4").Value) Then
+        MsgBox "Valor em J4 inválido", vbCritical
+        Exit Sub
+    End If
+    alvo = ws.Range("J4").Value
+    
+    ' Carregar valores
+    ReDim valores(1 To rng.Cells.count)
+    ReDim enderecos(1 To rng.Cells.count)
+    countVal = 0
+    For Each cel In rng
+        If IsNumeric(cel.Value) Then
+            If Not cel.EntireRow.Hidden And cel.Interior.ColorIndex = xlColorIndexNone Then
+                countVal = countVal + 1
+                valores(countVal) = cel.Value
+                enderecos(countVal) = cel.Address
+            End If
+        End If
+    Next cel
+    If countVal = 0 Then Exit Sub
+    
+    ReDim Preserve valores(1 To countVal)
+    ReDim Preserve enderecos(1 To countVal)
+    
+    ' Ordenar por valor absoluto (opcional para melhorar performance)
+    Call QuickSortAbs(valores, enderecos, 1, countVal)
+    
+    ' Definir tamanho máximo (pode ser countVal)
+    tamanhoMax = countVal
+    
+    Dim usados() As Boolean
+    ReDim usados(1 To countVal)
+    
+    Dim tamanhoAtual As Long
+    Dim encontrado As Boolean
+    
+    ' Testar combinações começando de 1 até tamanhoMax
+    For tamanhoAtual = 1 To tamanhoMax
+        If BuscaPorTamanho(valores, enderecos, usados, alvo, 1, 0, 0, tamanhoAtual) Then
+            encontrado = True
+            Exit For
+        End If
+    Next tamanhoAtual
+    
+    If encontrado Then
+        MsgBox "Combinação encontrada com " & tamanhoAtual & " células!", vbInformation
+    Else
+        MsgBox "Nenhuma combinação encontrada", vbInformation
+    End If
+End Sub
+Function BuscaPorTamanho(valores() As Double, enderecos() As String, usados() As Boolean, alvo As Double, idx As Long, somaAtual As Double, qtdAtual As Long, tamanhoMeta As Long) As Boolean
+    Dim i As Long
+    
+    ' Se soma exata encontrada e tamanho correto
+    If somaAtual = alvo And qtdAtual = tamanhoMeta Then
+        For i = 1 To UBound(usados)
+            If usados(i) Then ActiveSheet.Range(enderecos(i)).Interior.Color = RGB(255, 165, 0)
+        Next i
+        BuscaPorTamanho = True
+        Exit Function
+    End If
+    
+    ' Se acabou lista ou já passou do tamanho desejado
+    If idx > UBound(valores) Or qtdAtual >= tamanhoMeta Then Exit Function
+    
+    For i = idx To UBound(valores)
+        usados(i) = True
+        If BuscaPorTamanho(valores, enderecos, usados, alvo, i + 1, somaAtual + valores(i), qtdAtual + 1, tamanhoMeta) Then
+            BuscaPorTamanho = True
+            Exit Function
+        End If
+        usados(i) = False
+    Next i
+End Function
+Sub QuickSortAbs(valores() As Double, enderecos() As String, ByVal first As Long, ByVal last As Long)
+    Dim low As Long, high As Long
+    Dim pivot As Double, tempVal As Double, tempAddr As String
+    low = first
+    high = last
+    pivot = Abs(valores((first + last) \ 2))
+    Do While low <= high
+        Do While Abs(valores(low)) > pivot
+            low = low + 1
+        Loop
+        Do While Abs(valores(high)) < pivot
+            high = high - 1
+        Loop
+        If low <= high Then
+            tempVal = valores(low)
+            valores(low) = valores(high)
+            valores(high) = tempVal
+            
+            tempAddr = enderecos(low)
+            enderecos(low) = enderecos(high)
+            enderecos(high) = tempAddr
+            
+            low = low + 1
+            high = high - 1
+        End If
+    Loop
+    If first < high Then QuickSortAbs valores, enderecos, first, high
+    If low < last Then QuickSortAbs valores, enderecos, low, last
+End Sub
