@@ -1,0 +1,340 @@
+Sub ChequeFuncionarios_Novo()
+    On Error GoTo TrataErro
+
+    Dim ws As Worksheet: Set ws = ActiveSheet
+    Dim primeiraLinha As Long: primeiraLinha = 6
+    Dim ultimaLinha As Long: ultimaLinha = ws.Cells(ws.Rows.count, "J").End(xlUp).Row
+    If ultimaLinha < primeiraLinha Then
+        MsgBox "Não há dados suficientes na coluna J para análise.", vbExclamation
+        Exit Sub
+    End If
+
+    ' Contadores e controle global
+    Dim ultimoGrupo As Long
+    If IsNumeric(ws.Range("N3").Value) Then
+        ultimoGrupo = ws.Range("N3").Value
+    Else
+        ultimoGrupo = 0
+    End If
+
+    Dim totalCelulas As Long: totalCelulas = 0
+    Dim totalGrupos As Long: totalGrupos = 0
+
+    Application.ScreenUpdating = False
+    Application.Calculation = xlCalculationManual
+
+    ' Carregar dados das colunas relevantes
+    Dim arrHist As Variant, arrVal As Variant, arrAno As Variant, arrMes As Variant, arrCompl As Variant, arrFLC As Variant
+    arrHist = ws.Range("G" & primeiraLinha & ":G" & ultimaLinha).Value
+    arrVal = ws.Range("J" & primeiraLinha & ":J" & ultimaLinha).Value
+    arrAno = ws.Range("C" & primeiraLinha & ":C" & ultimaLinha).Value
+    arrMes = ws.Range("D" & primeiraLinha & ":D" & ultimaLinha).Value
+    arrCompl = ws.Range("H" & primeiraLinha & ":H" & ultimaLinha).Value
+    arrFLC = ws.Range("F" & primeiraLinha & ":F" & ultimaLinha).Value
+
+    ' Dicionário global para cheques
+    Dim cheques As Object: Set cheques = CreateObject("Scripting.Dictionary")
+    Dim i As Long, linhaAtual As Long
+    For i = 1 To UBound(arrHist)
+        linhaAtual = i + primeiraLinha - 1
+        If Not ws.Rows(linhaAtual).Hidden Then
+            Dim histChk As String: histChk = UCase(Trim(arrHist(i, 1)))
+            If Left(histChk, 6) = "CHQ.CX" And IsNumeric(arrVal(i, 1)) Then
+                Dim chaveCheque As String
+                chaveCheque = Format(arrVal(i, 1), "0.00")
+                If Not cheques.Exists(chaveCheque) Then cheques.Add chaveCheque, New Collection
+                cheques(chaveCheque).Add linhaAtual
+            End If
+        End If
+    Next i
+
+    ' Dicionário global para itens usados
+    Dim usadasTotal As Object: Set usadasTotal = CreateObject("Scripting.Dictionary")
+
+    ' ============================================================
+    ' ETAPA 1: Pares globais por número (Complemento)
+    ' ============================================================
+    Dim mapaNumeros As Object: Set mapaNumeros = CreateObject("Scripting.Dictionary")
+    For i = 1 To UBound(arrCompl)
+        linhaAtual = i + primeiraLinha - 1
+        If Not ws.Rows(linhaAtual).Hidden And IsNumeric(arrVal(i, 1)) Then
+            Dim numGrupo As String
+            numGrupo = ExtrairNumeros(UCase(arrCompl(i, 1))) ' Extrai apenas números do complemento
+            If numGrupo <> "" Then
+                If Not mapaNumeros.Exists(numGrupo) Then mapaNumeros.Add numGrupo, New Collection
+                mapaNumeros(numGrupo).Add linhaAtual
+            End If
+        End If
+    Next i
+
+    ' Pintar pares globais (positivo + negativo = 0)
+    Dim chaveNum As Variant
+    For Each chaveNum In mapaNumeros.Keys
+        Dim linhasNum As Collection: Set linhasNum = mapaNumeros(chaveNum)
+        Dim x As Long, y As Long
+        For x = 1 To linhasNum.count - 1
+            For y = x + 1 To linhasNum.count
+                If Not usadasTotal.Exists(ws.Cells(linhasNum(x), "J").Address) And _
+                   Not usadasTotal.Exists(ws.Cells(linhasNum(y), "J").Address) Then
+                    Dim valX As Double, valY As Double
+                    valX = Round(ws.Cells(linhasNum(x), "J").Value, 2)
+                    valY = Round(ws.Cells(linhasNum(y), "J").Value, 2)
+                    If Round(valX + valY, 2) = 0 Then
+                        ultimoGrupo = ultimoGrupo + 1
+                        totalGrupos = totalGrupos + 1
+                        ws.Cells(linhasNum(x), "J").Interior.Color = RGB(255, 255, 0)
+                        ws.Cells(linhasNum(y), "J").Interior.Color = RGB(255, 255, 0)
+                        ws.Cells(linhasNum(x), "M").Value = "Par Global nº " & ultimoGrupo
+                        ws.Cells(linhasNum(y), "M").Value = "Par Global nº " & ultimoGrupo
+                        usadasTotal.Add ws.Cells(linhasNum(x), "J").Address, True
+                        usadasTotal.Add ws.Cells(linhasNum(y), "J").Address, True
+                        totalCelulas = totalCelulas + 2
+                    End If
+                End If
+            Next y
+        Next x
+    Next chaveNum
+
+    ' ============================================================
+    ' ETAPA 2: Agrupamento por COMPLEMENTO
+    ' ============================================================
+    Dim gruposCompl As Object: Set gruposCompl = CreateObject("Scripting.Dictionary")
+    For i = 1 To UBound(arrHist)
+        linhaAtual = i + primeiraLinha - 1
+        If Not ws.Rows(linhaAtual).Hidden And IsNumeric(arrVal(i, 1)) Then
+            Dim chaveGrupo As String
+            chaveGrupo = UCase(Trim(arrCompl(i, 1)))
+            If Not gruposCompl.Exists(chaveGrupo) Then gruposCompl.Add chaveGrupo, New Collection
+            gruposCompl(chaveGrupo).Add linhaAtual
+        End If
+    Next i
+
+    Call ProcessarGrupos(gruposCompl, usadasTotal, ultimoGrupo, totalGrupos, totalCelulas, ws, arrVal, arrAno, arrMes, cheques)
+
+    ' ============================================================
+    ' ETAPA 3: Agrupamento por FLC (para itens não usados)
+    ' ============================================================
+    Dim gruposFLC As Object: Set gruposFLC = CreateObject("Scripting.Dictionary")
+    For i = 1 To UBound(arrHist)
+        linhaAtual = i + primeiraLinha - 1
+        If Not ws.Rows(linhaAtual).Hidden And IsNumeric(arrVal(i, 1)) Then
+            If Not usadasTotal.Exists(ws.Cells(linhaAtual, "J").Address) Then
+                Dim chaveFLC As String
+                chaveFLC = UCase(Trim(arrFLC(i, 1)))
+                If Not gruposFLC.Exists(chaveFLC) Then gruposFLC.Add chaveFLC, New Collection
+                gruposFLC(chaveFLC).Add linhaAtual
+            End If
+        End If
+    Next i
+
+    Call ProcessarGrupos(gruposFLC, usadasTotal, ultimoGrupo, totalGrupos, totalCelulas, ws, arrVal, arrAno, arrMes, cheques)
+
+    ' ============================================================
+    ' RESULTADO FINAL
+    ' ============================================================
+    ws.Range("N3").Value = ultimoGrupo
+    MsgBox "Processo concluído!" & vbCrLf & _
+           "Total de grupos: " & totalGrupos & vbCrLf & _
+           "Total de células pintadas: " & totalCelulas, vbInformation
+
+Finalizar:
+    Application.ScreenUpdating = True
+    Application.Calculation = xlCalculationAutomatic
+    Exit Sub
+
+TrataErro:
+    MsgBox "Ocorreu um erro: " & Err.Description, vbCritical, "Erro"
+    Resume Finalizar
+End Sub
+
+' ============================================================
+' Função para processar grupos (Complemento e FLC)
+' ============================================================
+Sub ProcessarGrupos(grupos As Object, usadasTotal As Object, _
+                    ByRef ultimoGrupo As Long, ByRef totalGrupos As Long, _
+                    ByRef totalCelulas As Long, ws As Worksheet, _
+                    arrVal As Variant, arrAno As Variant, arrMes As Variant, _
+                    cheques As Object)
+
+    Dim chave As Variant
+    For Each chave In grupos.Keys
+        Dim linhasGrupo As Collection: Set linhasGrupo = grupos(chave)
+        Dim valores() As Double: ReDim valores(1 To linhasGrupo.count)
+        Dim anos() As Long: ReDim anos(1 To linhasGrupo.count)
+        Dim meses() As Long: ReDim meses(1 To linhasGrupo.count)
+
+        Dim i As Long
+        For i = 1 To linhasGrupo.count
+            valores(i) = Round(ws.Cells(linhasGrupo(i), "J").Value, 2)
+            anos(i) = Val(ws.Cells(linhasGrupo(i), "C").Value)
+            meses(i) = Val(ws.Cells(linhasGrupo(i), "D").Value)
+        Next i
+
+        ' ============================================================
+        ' NOVA LÓGICA: Verificar se soma total do grupo é zero
+        ' ============================================================
+        Dim somaGrupo As Double: somaGrupo = 0
+        For i = 1 To linhasGrupo.count
+            somaGrupo = somaGrupo + valores(i)
+        Next i
+
+        If Round(somaGrupo, 2) = 0 Then
+            ultimoGrupo = ultimoGrupo + 1
+            totalGrupos = totalGrupos + 1
+            For i = 1 To linhasGrupo.count
+                If Not usadasTotal.Exists(ws.Cells(linhasGrupo(i), "J").Address) Then
+                    ws.Cells(linhasGrupo(i), "J").Interior.Color = RGB(255, 255, 0)
+                    ws.Cells(linhasGrupo(i), "M").Value = "Grupo nº " & ultimoGrupo
+                    usadasTotal.Add ws.Cells(linhasGrupo(i), "J").Address, True
+                    totalCelulas = totalCelulas + 1
+                End If
+            Next i
+            GoTo ProximoGrupo ' Pula pares e sobras
+        End If
+
+        ' Pares internos
+        Dim j As Long
+        For i = 1 To linhasGrupo.count - 1
+            For j = i + 1 To linhasGrupo.count
+                If Not usadasTotal.Exists(ws.Cells(linhasGrupo(i), "J").Address) And _
+                   Not usadasTotal.Exists(ws.Cells(linhasGrupo(j), "J").Address) Then
+                    If Round(valores(i) + valores(j), 2) = 0 Then
+                        ultimoGrupo = ultimoGrupo + 1
+                        totalGrupos = totalGrupos + 1
+                        ws.Cells(linhasGrupo(i), "J").Interior.Color = RGB(255, 255, 0)
+                        ws.Cells(linhasGrupo(j), "J").Interior.Color = RGB(255, 255, 0)
+                        ws.Cells(linhasGrupo(i), "M").Value = "Par nº " & ultimoGrupo
+                        ws.Cells(linhasGrupo(j), "M").Value = "Par nº " & ultimoGrupo
+                        usadasTotal.Add ws.Cells(linhasGrupo(i), "J").Address, True
+                        usadasTotal.Add ws.Cells(linhasGrupo(j), "J").Address, True
+                        totalCelulas = totalCelulas + 2
+                    End If
+                End If
+            Next j
+        Next i
+
+        ' Sobras por ano + cheques
+        Dim sobrasPorAno As Object: Set sobrasPorAno = CreateObject("Scripting.Dictionary")
+        For i = 1 To linhasGrupo.count
+            If Not usadasTotal.Exists(ws.Cells(linhasGrupo(i), "J").Address) Then
+                If valores(i) > 0 Then
+                    Dim chaveAno As String: chaveAno = anos(i)
+                    If Not sobrasPorAno.Exists(chaveAno) Then sobrasPorAno.Add chaveAno, New Collection
+                    sobrasPorAno(chaveAno).Add Array(i, valores(i), anos(i), meses(i))
+                End If
+            End If
+        Next i
+
+        ' Buscar cheque para sobras
+        Dim anoSobra As Variant
+        For Each anoSobra In sobrasPorAno.Keys
+            Dim colSobra As Collection: Set colSobra = sobrasPorAno(anoSobra)
+            Dim totalSobra As Double: totalSobra = 0
+            Dim mesReferencia As Long: mesReferencia = 0
+            Dim item As Variant
+            For Each item In colSobra
+                totalSobra = totalSobra + item(1)
+                mesReferencia = item(3)
+            Next item
+
+            Dim chequeEncontrado As Long: chequeEncontrado = 0
+            Dim offset As Long, mesCheck As Long, anoCheck As Long
+            For offset = -6 To 6
+                mesCheck = mesReferencia + offset
+                anoCheck = anoSobra
+                Do While mesCheck < 1: mesCheck = mesCheck + 12: anoCheck = anoCheck - 1: Loop
+                Do While mesCheck > 12: mesCheck = mesCheck - 12: anoCheck = anoCheck + 1: Loop
+
+                Dim chaveBusca As String: chaveBusca = Format(-totalSobra, "0.00")
+                If cheques.Exists(chaveBusca) Then
+                    Dim linhasCheques As Collection: Set linhasCheques = cheques(chaveBusca)
+                    Dim linhaCheque As Variant
+                    For Each linhaCheque In linhasCheques
+                        If IsEmpty(ws.Cells(linhaCheque, "M").Value) Then
+                            chequeEncontrado = linhaCheque
+                            Exit For
+                        End If
+                    Next linhaCheque
+                    If chequeEncontrado > 0 Then Exit For
+                End If
+            Next offset
+
+            If chequeEncontrado > 0 Then
+                ultimoGrupo = ultimoGrupo + 1
+                totalGrupos = totalGrupos + 1
+                For Each item In colSobra
+                    Dim idxLinha As Long: idxLinha = item(0)
+                    ws.Cells(linhasGrupo(idxLinha), "J").Interior.Color = RGB(255, 255, 0)
+                    ws.Cells(linhasGrupo(idxLinha), "M").Value = "Diversos nº " & ultimoGrupo
+                    usadasTotal.Add ws.Cells(linhasGrupo(idxLinha), "J").Address, True
+                    totalCelulas = totalCelulas + 1
+                Next item
+                ws.Cells(chequeEncontrado, "J").Interior.Color = RGB(255, 255, 0)
+                ws.Cells(chequeEncontrado, "M").Value = "Diversos nº " & ultimoGrupo
+                totalCelulas = totalCelulas + 1
+            End If
+        Next anoSobra
+
+ProximoGrupo:
+    Next chave
+End Sub
+' Função para extrair apenas números do complemento
+Function ExtrairNumeros(txt As String) As String
+    Dim i As Long, ch As String, result As String
+    result = ""
+    For i = 1 To Len(txt)
+        ch = Mid(txt, i, 1)
+        If IsNumeric(ch) Then result = result & ch
+    Next i
+    ExtrairNumeros = result
+End Function
+Function EncontrarCombinacoes(valores() As Double, incluirMaiores As Boolean, maxTam As Long) As Collection
+    Dim resultado As New Collection
+    Dim i As Long, j As Long, k As Long, l As Long
+    Dim lBoundVal As Long, uBoundVal As Long
+    lBoundVal = LBound(valores)
+    uBoundVal = UBound(valores)
+
+    ' Pares
+    For i = lBoundVal To uBoundVal - 1
+        For j = i + 1 To uBoundVal
+            If Round(valores(i) + valores(j), 2) = 0 Then
+                Dim par(1) As Long: par(0) = i: par(1) = j
+                resultado.Add par
+            End If
+        Next j
+    Next i
+
+    If incluirMaiores Then
+        ' Trios
+        For i = lBoundVal To uBoundVal - 2
+            For j = i + 1 To uBoundVal - 1
+                For k = j + 1 To uBoundVal
+                    If Round(valores(i) + valores(j) + valores(k), 2) = 0 Then
+                        Dim trio(2) As Long: trio(0) = i: trio(1) = j: trio(2) = k
+                        resultado.Add trio
+                    End If
+                Next k
+            Next j
+        Next i
+
+        ' Quartetos
+        If maxTam >= 4 Then
+            For i = lBoundVal To uBoundVal - 3
+                For j = i + 1 To uBoundVal - 2
+                    For k = j + 1 To uBoundVal - 1
+                        For l = k + 1 To uBoundVal
+                            If Round(valores(i) + valores(j) + valores(k) + valores(l), 2) = 0 Then
+                                Dim quarteto(3) As Long
+                                quarteto(0) = i: quarteto(1) = j: quarteto(2) = k: quarteto(3) = l
+                                resultado.Add quarteto
+                            End If
+                        Next l
+                    Next k
+                Next j
+            Next i
+        End If
+    End If
+
+    Set EncontrarCombinacoes = resultado
+End Function
