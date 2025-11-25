@@ -1,0 +1,217 @@
+Sub PintarCritério()
+    Dim ws As Worksheet
+    Set ws = ActiveSheet
+
+    Dim colunaCrit As String
+    colunaCrit = InputBox("Informe a letra da coluna que contém o critério (ex: F):", "Selecionar Coluna de Critério")
+    If colunaCrit = "" Then
+        MsgBox "Operação cancelada. Nenhuma coluna foi informada.", vbExclamation
+        Exit Sub
+    End If
+
+    Dim incluirMaiores As VbMsgBoxResult
+    incluirMaiores = MsgBox("Deseja analisar combinações maiores (além de pares)?", vbYesNoCancel + vbQuestion, "Combinações Maiores?")
+    If incluirMaiores = vbCancel Then
+        MsgBox "Operação cancelada.", vbCritical
+        Exit Sub
+    End If
+
+    Dim maxTam As Long
+    If incluirMaiores = vbYes Then
+        maxTam = 4
+    Else
+        maxTam = 2
+    End If
+
+    Dim primeiraLinha As Long: primeiraLinha = 6
+    Dim ultimaLinha As Long: ultimaLinha = ws.Cells(ws.Rows.count, "J").End(xlUp).Row
+    If ultimaLinha < primeiraLinha Then
+        MsgBox "Não há dados suficientes na coluna J para análise.", vbExclamation
+        Exit Sub
+    End If
+
+    Dim usadas As Object
+    Set usadas = CreateObject("Scripting.Dictionary")
+
+    Dim tInicio As Double: tInicio = Timer
+    Dim ultimoGrupo As Long
+    If IsNumeric(ws.Range("N3").Value) Then
+        ultimoGrupo = ws.Range("N3").Value
+    Else
+        ultimoGrupo = 0
+    End If
+
+    Application.ScreenUpdating = False
+    Application.Calculation = xlCalculationManual
+
+    Dim grupos As Object
+    Set grupos = CreateObject("Scripting.Dictionary")
+
+    Dim i As Long
+    For i = primeiraLinha To ultimaLinha
+        If Not ws.Rows(i).Hidden And ws.Cells(i, "J").Interior.Color <> RGB(255, 255, 0) Then
+            Dim VALOR As Variant: VALOR = ws.Cells(i, "J").Value
+            Dim crit As String: crit = Trim(ws.Cells(i, colunaCrit).Value)
+            If IsNumeric(VALOR) And Trim(VALOR) <> "" And Trim(VALOR) <> "-" And crit <> "-" Then
+                If Not grupos.Exists(crit) Then
+                    grupos.Add crit, New Collection
+                End If
+                grupos(crit).Add ws.Cells(i, "J")
+            End If
+        End If
+    Next i
+
+    Dim chave As Variant
+    For Each chave In grupos.Keys
+        Dim celulas As Collection: Set celulas = grupos(chave)
+        Dim somaGrupo As Double: somaGrupo = 0
+        Dim valores() As Double
+        ReDim valores(1 To celulas.count)
+
+        Dim idx As Long
+        For idx = 1 To celulas.count
+            valores(idx) = Round(CDbl(celulas(idx).Value), 2)
+            somaGrupo = somaGrupo + valores(idx)
+        Next idx
+
+        Application.StatusBar = "Processando grupo: " & chave & " (" & celulas.count & " itens)"
+
+        Dim houveComb As Boolean: houveComb = False
+
+        ' PASSO 1: Se soma total = 0 ? pinta tudo como Grupo nº X
+        If Round(somaGrupo, 2) = 0 Then
+            ultimoGrupo = ultimoGrupo + 1
+            For idx = 1 To celulas.count
+                If Not usadas.Exists(celulas(idx).Address) Then
+                    celulas(idx).Interior.Color = RGB(255, 255, 0)
+                    usadas.Add celulas(idx).Address, True
+                    ws.Cells(celulas(idx).Row, "M").Value = "Grupo nº " & ultimoGrupo
+                End If
+            Next idx
+            houveComb = True
+        Else
+            ' PASSO 2: Buscar pares, trios e quartetos
+            Dim encontrou As Boolean
+            Do
+                encontrou = False
+                Dim comb As Collection
+                Set comb = EncontrarCombinacaoDisponivel(valores, usadas, celulas, maxTam)
+                
+                If Not comb Is Nothing Then
+                    encontrou = True
+                    houveComb = True
+                    ultimoGrupo = ultimoGrupo + 1
+                    Dim tipoGrupo As String
+                    Select Case comb.count
+                        Case 2: tipoGrupo = "Par nº "
+                        Case 3: tipoGrupo = "Trio nº "
+                        Case Else: tipoGrupo = "Combinação nº "
+                    End Select
+
+                    Dim pos As Variant
+                    For Each pos In comb
+                        celulas(pos).Interior.Color = RGB(255, 255, 0)
+                        usadas.Add celulas(pos).Address, True
+                        ws.Cells(celulas(pos).Row, "M").Value = tipoGrupo & ultimoGrupo
+                    Next pos
+                End If
+            Loop While encontrou
+        End If
+
+        ' PASSO 3: Marcar sobras como "Sobra" se houve pelo menos uma combinação
+        If houveComb Then
+            For idx = 1 To celulas.count
+                If Not usadas.Exists(celulas(idx).Address) Then
+                    If IsNumeric(celulas(idx).Value) And Trim(celulas(idx).Value) <> "" And Trim(celulas(idx).Value) <> "-" Then
+                        ws.Cells(celulas(idx).Row, "M").Value = "Sobra"
+                    End If
+                End If
+            Next idx
+        End If
+    Next chave
+
+    ws.Range("N3").Value = ultimoGrupo
+    Application.StatusBar = False
+    Application.ScreenUpdating = True
+    Application.Calculation = xlCalculationAutomatic
+
+    Dim tFim As Double: tFim = Timer
+    MsgBox "Processo concluído!" & vbCrLf & _
+           "Tempo: " & Format(tFim - tInicio, "0.00") & " segundos" & vbCrLf & _
+           "Total de células pintadas: " & usadas.count, vbInformation, "Finalizado"
+End Sub
+
+Function EncontrarCombinacaoDisponivel(valores() As Double, usadas As Object, celulas As Collection, maxTam As Long) As Collection
+    Dim n As Long: n = UBound(valores)
+    Dim i As Long, j As Long, k As Long, l As Long
+
+    ' Pares
+    For i = 1 To n - 1
+        If Not usadas.Exists(celulas(i).Address) Then
+            For j = i + 1 To n
+                If Not usadas.Exists(celulas(j).Address) Then
+                    If Round(valores(i) + valores(j), 2) = 0 Then
+                        Dim resultado As New Collection
+                        resultado.Add i
+                        resultado.Add j
+                        Set EncontrarCombinacaoDisponivel = resultado
+                        Exit Function
+                    End If
+                End If
+            Next j
+        End If
+    Next i
+
+    If maxTam >= 3 Then
+        For i = 1 To n - 2
+            If Not usadas.Exists(celulas(i).Address) Then
+                For j = i + 1 To n - 1
+                    If Not usadas.Exists(celulas(j).Address) Then
+                        For k = j + 1 To n
+                            If Not usadas.Exists(celulas(k).Address) Then
+                                If Round(valores(i) + valores(j) + valores(k), 2) = 0 Then
+                                    Dim trio As New Collection
+                                    trio.Add i
+                                    trio.Add j
+                                    trio.Add k
+                                    Set EncontrarCombinacaoDisponivel = trio
+                                    Exit Function
+                                End If
+                            End If
+                        Next k
+                    End If
+                Next j
+            End If
+        Next i
+    End If
+
+    If maxTam >= 4 Then
+        For i = 1 To n - 3
+            If Not usadas.Exists(celulas(i).Address) Then
+                For j = i + 1 To n - 2
+                    If Not usadas.Exists(celulas(j).Address) Then
+                        For k = j + 1 To n - 1
+                            If Not usadas.Exists(celulas(k).Address) Then
+                                For l = k + 1 To n
+                                    If Not usadas.Exists(celulas(l).Address) Then
+                                        If Round(valores(i) + valores(j) + valores(k) + valores(l), 2) = 0 Then
+                                            Dim quarteto As New Collection
+                                            quarteto.Add i
+                                            quarteto.Add j
+                                            quarteto.Add k
+                                            quarteto.Add l
+                                            Set EncontrarCombinacaoDisponivel = quarteto
+                                            Exit Function
+                                        End If
+                                    End If
+                                Next l
+                            End If
+                        Next k
+                    End If
+                Next j
+            End If
+        Next i
+    End If
+
+    Set EncontrarCombinacaoDisponivel = Nothing
+End Function
