@@ -1,0 +1,20 @@
+=(NÚM.CARACT(U193)-NÚM.CARACT(SUBSTITUIR(U193;CARACT(10);"")))/NÚM.CARACT(CARACT(10))+1
+
+NÚM.CARACT(U193)
+Conta o número total de caracteres na célula U193.
+
+SUBSTITUIR(U193;CARACT(10);"")
+Remove todas as quebras de linha da célula (o caractere CARACT(10) representa a quebra de linha no Excel).
+
+NÚM.CARACT(SUBSTITUIR(...))
+Conta os caracteres depois de remover as quebras de linha.
+
+Diferença:
+NÚM.CARACT(U193) - NÚM.CARACT(SUBSTITUIR(...))
+Isso dá a quantidade de quebras de linha na célula.
+
+Divisão por NÚM.CARACT(CARACT(10))
+Como CARACT(10) é um único caractere, NÚM.CARACT(CARACT(10)) = 1. Então essa divisão não muda nada, mas está aí por consistência.
+
++1 no final
+Se há 2 quebras de linha, significa que existem 3 linhas (ou seja, 3 arquivos). Por isso soma 1.
