@@ -1,0 +1,211 @@
+
+' ================================================
+' Verificar grifos (Highlight) em documentos Word
+' A partir do Excel (VBA) com automação Late Binding
+' Autor: M365 Copilot
+' ================================================
+
+Option Explicit
+
+' === Parâmetros — ajuste se quiser ===
+Private Const INCLUDE_SUBFOLDERS As Boolean = True   ' True para incluir subpastas
+Private Const SCAN_DOCX As Boolean = True           ' .docx
+Private Const SCAN_DOC As Boolean = True            ' .doc
+
+' === Constantes do Word (Late Binding) ===
+Private Const wdFindStop As Long = 0
+Private Const wdCollapseEnd As Long = 0
+
+Public Sub VerificarGrifosWord_Excel()
+    Dim pastaSelecionada As String
+    pastaSelecionada = PickFolder("Selecione a pasta com os arquivos Word")
+    If Len(pastaSelecionada) = 0 Then
+        MsgBox "Nenhuma pasta selecionada.", vbExclamation
+        Exit Sub
+    End If
+    
+    Application.ScreenUpdating = False
+    Application.EnableEvents = False
+    
+    Dim ws As Worksheet
+    Set ws = PrepararRelatorioSheet("Relatorio_Grifos")
+    
+    ' Cabeçalho
+    With ws
+        .Range("A1:D1").Value = Array("Arquivo", "Caminho", "Status", "Ocorrências (Highlight)")
+        .Rows(1).Font.Bold = True
+    End With
+    
+    ' Criar instância do Word (Late Binding, sem referência)
+    Dim wordApp As Object
+    On Error Resume Next
+    Set wordApp = CreateObject("Word.Application")
+    On Error GoTo 0
+    If wordApp Is Nothing Then
+        MsgBox "Não foi possível iniciar o Word. Verifique a instalação.", vbCritical
+        GoTo Fim
+    End If
+    wordApp.Visible = False
+    On Error Resume Next
+    wordApp.DisplayAlerts = 0 ' wdAlertsNone
+    On Error GoTo 0
+    
+    ' Listar arquivos
+    Dim listaArquivos As Collection
+    Set listaArquivos = New Collection
+    ListarArquivosPasta pastaSelecionada, listaArquivos
+    
+    ' Percorrer arquivos e verificar grifos
+    Dim i As Long, linha As Long
+    linha = 2
+    
+    Dim caminho As Variant
+    For Each caminho In listaArquivos
+        Dim temGrifo As Boolean
+        Dim qtd As Long
+        Dim statusTexto As String
+        
+        On Error Resume Next
+        temGrifo = DocumentoTemHighlight(CStr(caminho), wordApp, qtd)
+        If Err.Number <> 0 Then
+            statusTexto = "Erro ao abrir (" & Err.Description & ")"
+            temGrifo = False
+            qtd = 0
+            Err.Clear
+        Else
+            statusTexto = IIf(temGrifo, "Com grifo", "OK")
+        End If
+        On Error GoTo 0
+        
+        ws.Cells(linha, 1).Value = NomeArquivo(CStr(caminho))
+        ws.Cells(linha, 2).Value = CStr(caminho)
+        ws.Cells(linha, 3).Value = statusTexto
+        ws.Cells(linha, 4).Value = qtd
+        
+        linha = linha + 1
+    Next caminho
+    
+    ' Formatar tabela
+    With ws
+        .Columns("A:D").EntireColumn.AutoFit
+        .ListObjects.Add(xlSrcRange, .Range("A1").CurrentRegion, , xlYes).Name = "tbRelatorioGrifos"
+        .Range("A1").Select
+    End With
+    
+    MsgBox "Concluído! " & (linha - 2) & " arquivo(s) analisados." & vbCrLf & _
+           "Relatório na planilha 'Relatorio_Grifos'.", vbInformation
+
+Fim:
+    On Error Resume Next
+    If Not wordApp Is Nothing Then wordApp.Quit
+    Set wordApp = Nothing
+    Application.EnableEvents = True
+    Application.ScreenUpdating = True
+End Sub
+
+
+' === Função que verifica se há Highlight no documento ===
+Private Function DocumentoTemHighlight(ByVal filePath As String, ByVal wordApp As Object, ByRef ocorrencias As Long) As Boolean
+    Dim doc As Object ' Word.Document
+    ocorrencias = 0
+    DocumentoTemHighlight = False
+    
+    ' Abrir como somente leitura, sem conversões
+    On Error GoTo TrataErro
+    Set doc = wordApp.Documents.Open(Filename:=filePath, ReadOnly:=True, AddToRecentFiles:=False, _
+                                     ConfirmConversions:=False, Revert:=False, NoEncodingDialog:=True)
+    On Error GoTo 0
+    
+    Dim sr As Object ' Word.Range
+    For Each sr In doc.StoryRanges
+        Dim rng As Object ' Word.Range
+        Set rng = sr.Duplicate
+        
+        With rng.Find
+            .ClearFormatting
+            .Replacement.ClearFormatting
+            .Text = ""              ' busca por formato
+            .Forward = True
+            .Wrap = wdFindStop
+            .Format = True
+            .Highlight = True       ' exigir texto grifado
+        End With
+        
+        Do While rng.Find.Execute
+            ocorrencias = ocorrencias + 1
+            DocumentoTemHighlight = True
+            rng.Collapse wdCollapseEnd
+        Loop
+    Next sr
+    
+TrataSaida:
+    On Error Resume Next
+    If Not doc Is Nothing Then doc.Close SaveChanges:=False
+    Set doc = Nothing
+    Exit Function
+
+TrataErro:
+    ' Propaga erro para quem chamou (será logado na planilha)
+    Resume TrataSaida
+End Function
+
+
+' === Utilitários de pasta/arquivos ===
+Private Sub ListarArquivosPasta(ByVal raiz As String, ByRef lista As Collection)
+    Dim fso As Object, pasta As Object, arq As Object, subp As Object
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    If Not fso.FolderExists(raiz) Then Exit Sub
+    
+    Set pasta = fso.GetFolder(raiz)
+    For Each arq In pasta.Files
+        Dim ext As String
+        ext = LCase$(fso.GetExtensionName(arq.Name))
+        If (SCAN_DOCX And ext = "docx") Or (SCAN_DOC And ext = "doc") Then
+            lista.Add arq.Path
+        End If
+    Next arq
+    
+    If INCLUDE_SUBFOLDERS Then
+        For Each subp In pasta.SubFolders
+            ListarArquivosPasta subp.Path, lista
+        Next subp
+    End If
+End Sub
+
+Private Function PickFolder(ByVal titulo As String) As String
+    With Application.FileDialog(msoFileDialogFolderPicker)
+        .Title = titulo
+        .AllowMultiSelect = False
+        If .Show = -1 Then
+            PickFolder = .SelectedItems(1)
+        Else
+            PickFolder = vbNullString
+        End If
+    End With
+End Function
+
+Private Function NomeArquivo(ByVal fullPath As String) As String
+    Dim p As Long
+    p = InStrRev(fullPath, "\")
+    If p > 0 Then
+        NomeArquivo = Mid$(fullPath, p + 1)
+    Else
+        NomeArquivo = fullPath
+    End If
+End Function
+
+Private Function PrepararRelatorioSheet(ByVal nomePlan As String) As Worksheet
+    Dim ws As Worksheet
+    On Error Resume Next
+    Set ws = ThisWorkbook.Worksheets(nomePlan)
+    On Error GoTo 0
+    If ws Is Nothing Then
+        Set ws = ThisWorkbook.Worksheets.Add
+        ws.Name = nomePlan
+    Else
+        ws.Cells.Clear
+    End If
+    Set PrepararRelatorioSheet = ws
+End Function
+
+
