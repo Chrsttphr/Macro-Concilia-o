@@ -1,0 +1,205 @@
+
+Option Explicit
+
+Sub ListarLinkarConteúdo()
+    Dim dialog As FileDialog
+    Dim pastaSelecionada As String
+    Dim fso As Object, pasta As Object, item As Object
+    Dim ws As Worksheet
+    Dim linha As Long
+    Dim sheetName As String
+    
+    sheetName = "ListaConteudo"
+    sheetName = SanitizeSheetName(sheetName)                 ' remove inválidos e limita a 31
+    
+    ' Seleciona a pasta
+    Set dialog = Application.FileDialog(msoFileDialogFolderPicker)
+    With dialog
+        .Title = "Selecione a pasta para listar conteúdo"
+        .AllowMultiSelect = False
+        If .Show <> -1 Then
+            MsgBox "Nenhuma pasta selecionada. Operação cancelada.", vbExclamation
+            Exit Sub
+        End If
+        pastaSelecionada = .SelectedItems(1)
+    End With
+
+    ' Substitui/exclui planilha existente com segurança
+    SafeDeleteSheet sheetName
+
+    ' Cria nova planilha e aplica o nome com fallback para evitar falha
+    Set ws = ThisWorkbook.Worksheets.Add
+    If Not TrySetSheetName(ws, sheetName) Then
+        ' Se mesmo assim falhar, cria um nome único com sufixo
+        sheetName = MakeUniqueSheetName(sheetName)
+        If Not TrySetSheetName(ws, sheetName) Then
+            MsgBox "Não foi possível nomear a planilha. Operação cancelada.", vbCritical
+            Exit Sub
+        End If
+    End If
+
+    ' Cabeçalho
+    ws.Range("A1:E1").Value = Array("Nome", "Tipo", "Data Modificação", "Tamanho (KB)", "Abrir")
+    With ws.Range("A1:E1")
+        .Font.Bold = True
+        .Font.Size = 12
+        .Interior.Color = RGB(79, 129, 189)
+        .Font.Color = RGB(255, 255, 255)
+        .HorizontalAlignment = xlCenter
+    End With
+
+    linha = 2
+
+    ' Inicializa FSO
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    Set pasta = fso.GetFolder(pastaSelecionada)
+
+    ' Subpastas
+    Dim it As Object
+    For Each it In pasta.SubFolders
+        ws.Cells(linha, 1).Value = it.Name
+        ws.Cells(linha, 2).Value = "Pasta"
+        ws.Cells(linha, 3).Value = it.DateLastModified
+        ws.Cells(linha, 4).Value = "-"  ' pasta não tem tamanho exibido
+
+        ws.Hyperlinks.Add Anchor:=ws.Cells(linha, 5), Address:=it.Path, TextToDisplay:="Abrir Pasta"
+        With ws.Cells(linha, 5)
+            .Font.Bold = True
+            .Font.Underline = xlUnderlineStyleNone
+            .Font.Color = RGB(0, 102, 204)
+        End With
+
+        linha = linha + 1
+    Next it
+
+    ' Arquivos
+    For Each it In pasta.Files
+        ws.Cells(linha, 1).Value = it.Name
+        ws.Cells(linha, 2).Value = "Arquivo"
+        ws.Cells(linha, 3).Value = it.DateLastModified
+        ws.Cells(linha, 4).Value = Round(it.Size / 1024, 0) ' KB inteiro
+
+        ws.Hyperlinks.Add Anchor:=ws.Cells(linha, 5), Address:=it.Path, TextToDisplay:="Abrir Arquivo"
+        With ws.Cells(linha, 5)
+            .Font.Bold = True
+            .Font.Underline = xlUnderlineStyleNone
+            .Font.Color = RGB(0, 102, 204)
+        End With
+
+        linha = linha + 1
+    Next it
+
+    ' Formatação e exceções
+    ws.Columns("A:E").AutoFit
+
+    With ws.Range("A2:E" & linha - 1)
+        .Font.Name = "Calibri"
+        .Font.Size = 11
+        .HorizontalAlignment = xlCenter   ' padrão: centro
+    End With
+
+    ' Nome à esquerda
+    ws.Columns(1).HorizontalAlignment = xlLeft
+    ' Tamanho (KB) com separador de milhar, sem decimal e centralizado
+    ws.Columns(4).NumberFormat = "#,##0"
+    ws.Columns(4).HorizontalAlignment = xlCenter
+    ' Data com formato completo
+    ws.Columns(3).NumberFormat = "dd/mm/yyyy hh:mm"
+
+    ' Linhas alternadas (zebrado)
+    Dim i As Long
+    For i = 2 To linha - 1
+        If i Mod 2 = 0 Then
+            ws.Range("A" & i & ":E" & i).Interior.Color = RGB(242, 242, 242)
+        End If
+    Next i
+
+    ' Filtros e bordas
+    ws.Range("A1:E1").AutoFilter
+    ws.Range("A1:E" & linha - 1).Borders.LineStyle = xlContinuous
+
+    MsgBox "Lista criada com sucesso na planilha '" & ws.Name & "'!", vbInformation
+End Sub
+
+' ===================== Helpers =====================
+
+' Tenta aplicar o nome à planilha; retorna True se conseguiu
+Private Function TrySetSheetName(ByVal ws As Worksheet, ByVal nm As String) As Boolean
+    On Error GoTo Fail
+    ws.Name = nm
+    TrySetSheetName = True
+    Exit Function
+Fail:
+    TrySetSheetName = False
+    On Error GoTo 0
+End Function
+
+' Remove caracteres inválidos, espaços finais e limita a 31 chars
+Private Function SanitizeSheetName(ByVal nm As String) As String
+    Dim badChars As Variant, c As Variant
+    badChars = Array(":", "\", "/", "?", "*", "[", "]")
+    For Each c In badChars
+        nm = Replace(nm, c, " ")
+    Next c
+    nm = Trim(nm)
+    ' Remove apóstrofos nos extremos
+    If Left$(nm, 1) = "'" Then nm = Mid$(nm, 2)
+    If Right$(nm, 1) = "'" Then nm = Left$(nm, Len(nm) - 1)
+    ' Limite 31
+    If Len(nm) = 0 Then nm = "Planilha"
+    If Len(nm) > 31 Then nm = Left$(nm, 31)
+    SanitizeSheetName = nm
+End Function
+
+' Gera um nome único caso já exista
+Private Function MakeUniqueSheetName(ByVal baseName As String) As String
+    Dim i As Long, tryName As String
+    i = 1
+    Do
+        tryName = baseName
+        ' adiciona sufixo reduzindo para caber em 31
+        If Len(tryName) > 27 Then tryName = Left$(tryName, 27)
+        tryName = tryName & " (" & i & ")"
+        If Not SheetExists(tryName) Then
+            MakeUniqueSheetName = tryName
+            Exit Function
+        End If
+        i = i + 1
+    Loop
+End Function
+
+' Verifica se já existe uma planilha com o nome
+Private Function SheetExists(ByVal nm As String) As Boolean
+    Dim sh As Worksheet
+    On Error Resume Next
+    Set sh = ThisWorkbook.Worksheets(nm)
+    SheetExists = Not (sh Is Nothing)
+    Set sh = Nothing
+    On Error GoTo 0
+End Function
+
+' Exclui com segurança a planilha se existir
+Private Sub SafeDeleteSheet(ByVal nm As String)
+    Dim sh As Worksheet
+    For Each sh In ThisWorkbook.Worksheets
+        If sh.Name = nm Then
+            Application.DisplayAlerts = False
+            ' se for a única, cria outra para permitir exclusão
+            If ThisWorkbook.Worksheets.Count = 1 Then
+                ThisWorkbook.Worksheets.Add
+            End If
+            ' se estiver ativa, ativa outra
+            If sh.Index = ActiveSheet.Index Then
+                ThisWorkbook.Worksheets(1).Activate
+            End If
+            ' tenta desproteger (caso esteja protegida)
+            On Error Resume Next
+            sh.Unprotect
+            On Error GoTo 0
+            ' exclui
+            sh.Delete
+            Application.DisplayAlerts = True
+            Exit Sub
+        End If
+    Next sh
+End Sub
